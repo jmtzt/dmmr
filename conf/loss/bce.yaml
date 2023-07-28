@@ -1,0 +1,2 @@
+sim_loss: bce
+pos_weight: 1

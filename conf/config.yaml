@@ -1,0 +1,9 @@
+# @package _global_
+defaults:
+  - _self_
+  - data: camcan
+  - network: dmmr_tanh
+  - loss: hinge
+  - training: training
+
+debug: False

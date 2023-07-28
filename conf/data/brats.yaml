@@ -1,0 +1,15 @@
+name: brats
+
+data_dir: '/home/joao/data/BraTS/'
+mask_dir: '/vol/alan/users/toz/midir-pycharm/datasets/brats_masks/'
+inter_subj: False
+split_ratio: 0.9
+patch_size: 17
+samples_per_volume: 32
+patch_sampler: 'label'
+training_batch_size: 2048
+validation_batch_size: 4096
+num_workers: 0
+pin_memory: True
+overfit: False
+modality: 't1t2'
