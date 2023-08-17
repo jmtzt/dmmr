@@ -5,10 +5,10 @@ import hydra
 import lightning as pl
 
 from lightning.pytorch.loggers import WandbLogger
-from lightning.pytorch.callbacks import ModelCheckpoint
+from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
 from omegaconf import DictConfig
 
-from data.datamodules import BraTSDataModule, CamCANDataModule
+from data.datamodules import CamCANDataModule
 from model.dmmr import DeepMetricModel
 
 seed = 1337  # for reproducibility
@@ -28,9 +28,7 @@ def main(cfg: DictConfig) -> None:
 
     torch.set_float32_matmul_precision('medium')
 
-    if cfg.data.name == 'brats':
-        dm = BraTSDataModule(**cfg.data)
-    elif cfg.data.name == 'camcan':
+    if cfg.data.name == 'camcan':
         dm = CamCANDataModule(**cfg.data)
     else:
         raise NotImplementedError(f'Unknown dataset: {cfg.data.name}')
@@ -42,12 +40,12 @@ def main(cfg: DictConfig) -> None:
     if not cfg['debug']:
         ckpt_callback = ModelCheckpoint(save_last=True,
                                         dirpath=checkpoint_path,
-                                        every_n_epochs=50,
+                                        every_n_epochs=20,
                                         verbose=True
                                         )
 
         project = f'overfit_{cfg.data.name}_dmmr' if cfg['data']['overfit'] else f'complete_{cfg.data.name}_dmmr'
-        tags = [f'{cfg.data.modality.lower()}_{cfg.network.type.lower()}_{cfg.loss.sim_loss.lower()}', 'delete']
+        tags = [f'{cfg.data.modality.lower()}_{cfg.network.type.lower()}_{cfg.loss.sim_loss.lower()}',]
         wandb_logger = WandbLogger(
             project=project,
             tags=tags,)
@@ -55,7 +53,8 @@ def main(cfg: DictConfig) -> None:
 
         trainer = pl.Trainer(
             logger=wandb_logger,
-            callbacks=[ckpt_callback],
+            callbacks=[ckpt_callback,
+                       EarlyStopping(monitor="val_loss", mode="min", patience=3)],
             **cfg.training.trainer,
             auto_lr_find=True)
     else:
@@ -66,17 +65,9 @@ def main(cfg: DictConfig) -> None:
     if not cfg['debug']:
         wandb_logger.watch(model, log='all', log_freq=cfg.training.gradients_log_interval)
 
-    trainer.tune(model, datamodule=dm)
-
+    # trainer.tune(model, datamodule=dm)
     trainer.fit(model, datamodule=dm)
 
 
 if __name__ == '__main__':
     main()
-
-# TODO: stick with previous implementation of patch labelling
-# TODO: apply the transformations on the _step function on the fly
-# TODO: use the randomized binary mask to select pos/neg patches/augmentation -> find a native pytorch fn for this
-# TODO: profile the code to see what is taking so long
-# TODO: add script to get curves for the trained dmmr model
-# TODO: add script to compile dmmr model into a torchscript .pt
