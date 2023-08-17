@@ -1,10 +1,13 @@
 import torch
-from omegaconf import OmegaConf, open_dict
 import torchio as tio
 import torch.nn as nn
+import matplotlib.pyplot as plt
+
 from lightning import LightningModule
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 from torch.optim import SGD, Adam
+from omegaconf import OmegaConf, open_dict
+from tqdm.auto import tqdm
 
 from model.dmmr_utils import get_loss_fn_dmmr, get_network_dmmr
 
@@ -62,9 +65,14 @@ class DeepMetricModel(LightningModule):
 
     def _step(self, batch):
         """ Forward pass inference + compute loss """
-        mod1 = batch['mod1'][tio.DATA].float()
-        mod2 = batch['mod2'][tio.DATA].float()
-        labels = batch['label'].float()
+        if isinstance(batch['mod1'], dict):
+            mod1 = batch['mod1'][tio.DATA].float()
+            mod2 = batch['mod2'][tio.DATA].float()
+            labels = batch['label'].float()
+        else:
+            mod1 = batch['mod1'].float()
+            mod2 = batch['mod2'].float()
+            labels = batch['label'].float()
 
         out = self.forward(mod1, mod2)
 
@@ -83,8 +91,9 @@ class DeepMetricModel(LightningModule):
     def training_step(self, batch, batch_idx):
         train_loss, out, labels = self._step(batch)
 
-        if self.hparams.network.type == 'dmmr_net':
+        if self.hparams.network.type == 'dmmr_net_sigmoid':
             preds = out > 0.5
+            labels = labels.bool()
         elif self.hparams.network.type == 'dmmr_net_tanh' and self.hparams.loss.sim_loss == 'hinge':
             preds = out > 0.0
             labels[labels == 0] = -1  # convert positive label 0 to -1
@@ -104,14 +113,36 @@ class DeepMetricModel(LightningModule):
         val_loss, out, labels = self._step(batch)
 
         if self.hparams.loss.sim_loss != 'hinge':
-            preds = torch.sigmoid(out) > 0.5
+            preds = out >= 0.5
+            labels = labels.bool()
+            # Convert tensors to numpy arrays for plotting
+            # preds_np = preds.cpu().numpy()
+            # labels_np = labels.cpu().numpy()
+            # out_np = torch.sigmoid(out).cpu().numpy()
+            #
+            # # # TODO: add this to logger image info
+            # # # Create a range of indices for x-axis
+            # x_axis = range(len(preds_np))
+            #
+            # # Plot all three tensors in the same plot
+            # plt.plot(x_axis, preds_np, label='Predictions')
+            # plt.plot(x_axis, labels_np, label='Labels', alpha=0.5)
+            # plt.plot(x_axis, out_np, label='Out')
+            #
+            # # Add labels and title to the plot
+            # plt.xlabel('Index')
+            # plt.ylabel('Value')
+            # plt.title('Predictions, Labels, and Out')
+            # plt.legend()
+            #
+            # # Show the plot
+            # plt.show()
         elif self.hparams.network.type == 'dmmr_net_tanh' and self.hparams.loss.sim_loss == 'hinge':
             preds = out > 0.0
             labels[labels == 0] = -1  # convert positive label 0 to -1
             labels[labels == -1] = False  # Positive is False in this case
             labels[labels == 1] = True  # Negative is True in this case
-        else:
-            preds = out > 0.5
+
         acc, f1, auc = self.compute_metrics(preds, labels)
 
         metrics_dict = {'val_loss': val_loss, 'val_acc': acc, 'val_f1': f1, 'val_auc': auc}
