@@ -1,16 +1,16 @@
-import torch
-import random
-import lightning as pl
-import torchio as tio
-import numpy as np
-import nibabel as nib
 import copy
-
-from torch.utils.data import DataLoader, Dataset
+import random
 from pathlib import Path
+
+import lightning as pl
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
+import torchio as tio
+from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
-from utils.randconv import randconv
+from utils.inference import show_image
 
 
 class BasePatchDataModule(pl.LightningDataModule):
@@ -28,6 +28,7 @@ class BasePatchDataModule(pl.LightningDataModule):
                  mask_threshold: float = 0,
                  overfit: bool = False,
                  modality: str = 't1t2',
+                 online_augmentations: bool = False,
                  random_convs: bool = False,
                  *args,
                  **kwargs):
@@ -47,24 +48,28 @@ class BasePatchDataModule(pl.LightningDataModule):
         self.modality = modality
         self.negative_transforms = None
         self.positive_transforms = None
+        self.online_augmentations = online_augmentations
         self.random_convs = random_convs
         self.args = args
         self.kwargs = kwargs
 
     @staticmethod
     def _setup_transforms(is_positive: bool = True):
-        # TODO: add a lot of rotation transforms here in smaller degrees
         if is_positive:
             pos_tfms = {}
-            num_tfms = 10
+            num_tfms = 3
             total_prob = 0.8
             degrees_arr = np.linspace(0, 270, num=num_tfms, endpoint=True)
             for i, degrees in enumerate(degrees_arr):
                 degrees_tuple = (degrees,) * 6
+                neg_degrees_tuple = (-degrees,) * 6
                 transform_value = tio.RandomAffine(scales=0, degrees=degrees_tuple,
                                                    include=['mod1', 'mod2', 'mod1_mask', 'mod2_mask'])
+                neg_transform_value = tio.RandomAffine(scales=0, degrees=neg_degrees_tuple,
+                                                       include=['mod1', 'mod2', 'mod1_mask', 'mod2_mask'])
                 probability = total_prob / num_tfms
-                pos_tfms[transform_value] = probability
+                pos_tfms[transform_value] = probability / 2
+                pos_tfms[neg_transform_value] = probability / 2
 
             pos_tfms[tio.RandomFlip(axes=(0, 1, 2), flip_probability=1,
                                     include=['mod1', 'mod2', 'mod1_mask', 'mod2_mask'])] = 0.10
@@ -81,7 +86,7 @@ class BasePatchDataModule(pl.LightningDataModule):
                     tio.RandomAffine(scales=0, degrees=(90, 90, 90), include=['mod1', 'mod1_mask']): 0.15,
                     tio.RandomAffine(scales=0, degrees=(180, 180, 180), include=['mod1', 'mod1_mask']): 0.25,
                     tio.RandomAffine(scales=0, degrees=(270, 270, 270), include=['mod1', 'mod1_mask']): 0.25,
-                    tio.RandomBlur(include=['mod1', 'mod1_mask',]): 0.20,
+                    tio.RandomBlur(include=['mod1', 'mod1_mask', ]): 0.20,
                 }, include=['mod1', 'mod1_mask']),
                 tio.OneOf({
                     tio.RandomFlip(axes=1, flip_probability=1, include=['mod2', 'mod2_mask']): 0.15,
@@ -130,7 +135,7 @@ class BasePatchDataModule(pl.LightningDataModule):
 
         patches = []
 
-        for subject in subjects:
+        for subject in tqdm(subjects, desc='Loading patches from subjects'):
             for patch in self.sampler(subject, num_patches=num_patches_per_subject):
                 if random_conv:
                     patch = self._random_conv(patch)
@@ -181,62 +186,128 @@ class BasePatchDataModule(pl.LightningDataModule):
                                                          self.positive_transforms,
                                                          self.negative_transforms)
 
+    @staticmethod
+    def label_collate_fn(batch):
+        affine_params = {'degrees': (-25, 25),
+                         'scales': (0.98, 1.2),
+                         'translation': (0.5, 0.5, 0.5),
+                         'x_degrees': (25, 0, 0),
+                         'y_degrees': (0, 25, 0),
+                         'z_degrees': (0, 0, 25), }
+        flip_params = {'axes': (0, 1, 2)}
+
+        def generate_transforms(modules, flip_params, affine_params):
+            transform = tio.Compose([
+                tio.OneOf({
+                    tio.RandomAffine(scales=0, degrees=affine_params['degrees'], translation=0, include=modules): 0.3,
+                    tio.RandomAffine(scales=affine_params['scales'], degrees=0, translation=0, include=modules): 0.1,
+                    tio.RandomAffine(scales=0, degrees=0, translation=affine_params['translation'],
+                                     include=modules): 0.2,
+                    tio.RandomAffine(degrees=affine_params['x_degrees'], scales=0, translation=0, include=modules): 0.1,
+                    tio.RandomAffine(degrees=affine_params['y_degrees'], scales=0, translation=0, include=modules): 0.1,
+                    tio.RandomAffine(degrees=affine_params['z_degrees'], scales=0, translation=0, include=modules): 0.1,
+                    tio.RandomAffine(degrees=affine_params['degrees'],
+                                     scales=affine_params['scales'],
+                                     translation=affine_params['translation'],
+                                     include=modules): 0.1,
+                }, include=modules),
+                tio.RandomFlip(**flip_params, include=modules),
+            ])
+            return transform
+
+        transform_pos = generate_transforms(['mod1', 'mod2'], flip_params, affine_params)
+        transform_neg = tio.Compose([generate_transforms(['mod1'], flip_params, affine_params),
+                                     generate_transforms(['mod2'], flip_params, affine_params),
+                                     tio.RandomFlip(**flip_params, include=['mod1', 'mod2'])])
+
+        def process_item(item, transform, label_value):
+            tfm_item = transform(item)
+            mod1 = tfm_item['mod1'][tio.DATA]
+            mod2 = tfm_item['mod2'][tio.DATA]
+            label = torch.tensor(label_value)
+            history = tfm_item.history
+            return mod1, mod2, label, history
+
+        def process_hist(hist):
+            for t in hist:
+                if t.name == 'Affine':
+                    round_tuple = lambda t: tuple(round(x, 2) for x in t)
+                    t.value = (f'deg{str(round_tuple(t.degrees))}-'
+                               f'scl{str(round_tuple(t.scales))}-'
+                               f'trn{str(round_tuple(t.translation))}')
+                else:
+                    t.value = ''
+
+            return hist
+
+        show = False
+        mod1_augmented_list = []
+        mod2_augmented_list = []
+        labels_augmented_list = []
+        for idx, item in enumerate(batch):
+
+            mod1_og, mod2_og = item['mod1'][tio.DATA], item['mod2'][tio.DATA]
+
+            if idx % 2 == 0:
+                mod1, mod2, label, history = process_item(item, transform_pos, 0.0)
+            else:
+                mod1, mod2, label, history = process_item(item, transform_neg, 1.0)
+
+            if show and idx < 16:
+                fig, axes = plt.subplots(nrows=1, ncols=4, figsize=(20, 5))
+                history = process_hist(history)
+                tfm_string = '\n'.join(f'{t.name}: {t.value}' for t in history)
+                show_image(mod1_og[0, mod1_og.shape[1] // 2],
+                           f"mod1_og", ax=axes[0])
+                show_image(mod2_og[0, mod2_og.shape[1] // 2],
+                           f"mod2_og", ax=axes[1])
+                show_image(mod1[0, mod1.shape[1] // 2],
+                           f"mod1", ax=axes[2])
+                show_image(mod2[0, mod2.shape[1] // 2],
+                           f"mod2 - idx {idx} - label {label}", ax=axes[3])
+                axes[3].text(1.05, 0.5, tfm_string, fontsize=10, ha='left', va='center',
+                             transform=axes[3].transAxes)
+                plt.tight_layout()
+                plt.show()
+
+            mod1_augmented_list.append(mod1)
+            mod2_augmented_list.append(mod2)
+            labels_augmented_list.append(label)
+
+        mod1 = torch.stack(mod1_augmented_list)
+        mod2 = torch.stack(mod2_augmented_list)
+        labels = torch.stack(labels_augmented_list)
+
+        return {'mod1': mod1, 'mod2': mod2, 'label': labels}
+
     def train_dataloader(self):
-        return DataLoader(self.patches_training_set,
-                          batch_size=self.training_batch_size,
-                          num_workers=self.num_workers,
-                          shuffle=True,
-                          pin_memory=True,)
+        if self.online_augmentations:
+            patches_queue = tio.Queue(
+                self.training_subjects,
+                self.samples_per_volume * 4,
+                self.samples_per_volume,
+                self._get_sampler(),
+                num_workers=self.num_workers,
+            )
+            return DataLoader(
+                patches_queue,
+                batch_size=self.training_batch_size,
+                num_workers=0,
+                collate_fn=self.label_collate_fn,
+            )
+        else:
+            return DataLoader(self.patches_training_set,
+                              batch_size=self.training_batch_size,
+                              num_workers=self.num_workers,
+                              shuffle=True,
+                              pin_memory=True, )
 
     def val_dataloader(self):
         return DataLoader(self.patches_validation_set,
                           batch_size=self.validation_batch_size,
                           num_workers=self.num_workers,
                           shuffle=False,
-                          pin_memory=True,)
-
-
-class BraTSDataModule(BasePatchDataModule):
-
-    def _load_subjects(self, stage):
-
-        if stage == 'fit' or stage is None:
-            prefix = 'Training'
-        elif stage == 'test' or stage == 'val':
-            prefix = 'Validation'
-
-        imgs_dir = self.data_dir / f'MICCAI_BraTS2020_{prefix}Data/'
-
-        def glob_nii_fn(folder, pattern):
-            nii_files = folder.glob(pattern)
-            return sorted(nii_files)
-
-        t1_img_paths = glob_nii_fn(imgs_dir, f'*/BraTS20_{prefix}_*_t1.nii.gz')
-        if self.modality == 't1t2':
-            t2_img_paths = glob_nii_fn(imgs_dir, f'*/BraTS20_{prefix}_*_t2.nii.gz')
-        elif self.modality == 't1t1':
-            t2_img_paths = glob_nii_fn(imgs_dir, f'*/BraTS20_{prefix}_*_t1.nii.gz')
-
-        if self.inter_subj or self.modality == 't1t1':
-            # shuffle t2 images so that they don't correspond to the same subject!
-            random.shuffle(t2_img_paths)
-
-        subjects = []
-        for t1_path, t2_path in zip(t1_img_paths, t2_img_paths):
-            subject = tio.Subject(
-                mod1=tio.ScalarImage(t1_path),
-                mod2=tio.ScalarImage(t2_path),
-            )
-            mod1_mask = torch.zeros_like(subject['mod1'][tio.DATA])
-            mod1_mask[subject['mod1'][tio.DATA] > 0] = 1
-            mod2_mask = torch.zeros_like(subject['mod2'][tio.DATA])
-            mod2_mask[subject['mod2'][tio.DATA] > 0] = 1
-            subject['mod1_mask'] = tio.LabelMap(tensor=mod1_mask)
-            subject['mod2_mask'] = tio.LabelMap(tensor=mod2_mask)
-            subject = tio.CopyAffine('mod1')(subject)
-            subjects.append(subject)
-
-        return subjects
+                          pin_memory=True, )
 
 
 class CamCANDataModule(BasePatchDataModule):
@@ -268,7 +339,7 @@ class CamCANDataModule(BasePatchDataModule):
 
         subjects = []
 
-        for t1_path, t2_path in zip(t1_img_paths, t2_img_paths):
+        for t1_path, t2_path in tqdm(zip(t1_img_paths, t2_img_paths), desc="Loading subjects"):
             mask1_path = t1_path.parent / 'T1_brain_MALPEM_tissues.nii.gz'
             mask2_path = t2_path.parent / 'T1_brain_MALPEM_tissues.nii.gz'
             subject = tio.Subject(
