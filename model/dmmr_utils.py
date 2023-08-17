@@ -9,7 +9,7 @@ def get_loss_fn_dmmr(hparams):
     if hparams.loss.sim_loss == "hinge":
         return HingeLoss(task="binary")
     elif hparams.loss.sim_loss == "bce":
-        return nn.BCEWithLogitsLoss(pos_weight=torch.tensor([hparams.loss.pos_weight]))
+        return nn.BCELoss(weight=torch.tensor([hparams.loss.pos_weight]))
 
 
 def get_network_dmmr(hparams):
