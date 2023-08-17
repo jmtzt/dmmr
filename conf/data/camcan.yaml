@@ -4,11 +4,12 @@ data_dir: '/home/joao/data/camcan_malpem/'
 inter_subj: False
 split_ratio: 0.9
 patch_size: 17
-samples_per_volume: 128
+samples_per_volume: 32
 patch_sampler: 'label'
 training_batch_size: 128
 validation_batch_size: 256
 num_workers: 32
 pin_memory: True
 overfit: False
+online_augmentations: True
 modality: 't1t2'

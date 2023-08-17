@@ -2,8 +2,8 @@
 defaults:
   - _self_
   - data: camcan
-  - network: dmmr_tanh
-  - loss: hinge
+  - network: dmmr_sigmoid
+  - loss: bce
   - training: training
 
 debug: False
