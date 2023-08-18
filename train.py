@@ -8,7 +8,7 @@ from lightning.pytorch.loggers import WandbLogger
 from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
 from omegaconf import DictConfig
 
-from data.datamodules import CamCANDataModule
+from data.datamodules import CamCANDataModule, IXIDataModule
 from model.dmmr import DeepMetricModel
 
 seed = 1337  # for reproducibility
@@ -30,6 +30,8 @@ def main(cfg: DictConfig) -> None:
 
     if cfg.data.name == 'camcan':
         dm = CamCANDataModule(**cfg.data)
+    elif cfg.data.name == 'ixi':
+        dm = IXIDataModule(**cfg.data)
     else:
         raise NotImplementedError(f'Unknown dataset: {cfg.data.name}')
 

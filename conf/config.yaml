@@ -1,7 +1,7 @@
 # @package _global_
 defaults:
   - _self_
-  - data: camcan
+  - data: ixi
   - network: dmmr_sigmoid
   - loss: bce
   - training: training

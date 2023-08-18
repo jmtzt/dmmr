@@ -274,9 +274,9 @@ class BasePatchDataModule(pl.LightningDataModule):
             mod2_augmented_list.append(mod2)
             labels_augmented_list.append(label)
 
-        mod1 = torch.stack(mod1_augmented_list)
-        mod2 = torch.stack(mod2_augmented_list)
-        labels = torch.stack(labels_augmented_list)
+        mod1 = torch.stack(mod1_augmented_list).float()
+        mod2 = torch.stack(mod2_augmented_list).float()
+        labels = torch.stack(labels_augmented_list).float()
 
         return {'mod1': mod1, 'mod2': mod2, 'label': labels}
 
@@ -300,7 +300,7 @@ class BasePatchDataModule(pl.LightningDataModule):
                               batch_size=self.training_batch_size,
                               num_workers=self.num_workers,
                               shuffle=True,
-                              pin_memory=True, )
+                              pin_memory=True,)
 
     def val_dataloader(self):
         return DataLoader(self.patches_validation_set,
@@ -348,6 +348,62 @@ class CamCANDataModule(BasePatchDataModule):
                 mod1_mask=tio.LabelMap(mask1_path),
                 mod2_mask=tio.LabelMap(mask2_path),
             )
+            subjects.append(subject)
+
+        return subjects
+
+
+class IXIDataModule(BasePatchDataModule):
+    def _load_subjects(self, stage):
+        def glob_nii_fn(folder, pattern):
+            nii_files = folder.glob(pattern)
+            return sorted(nii_files)
+
+        t1_img_paths = glob_nii_fn(self.data_dir, '*-T1.nii.gz')
+        if self.modality == 't1t2':
+            t2_img_paths = glob_nii_fn(self.data_dir, '*-T2.nii.gz')
+        elif self.modality == 't1t1':
+            t2_img_paths = glob_nii_fn(self.data_dir, '*-T1.nii.gz')
+        else:
+            raise ValueError(f"Modality {self.modality} not supported")
+
+        t1_prefixes = {str(f).split('-T1.nii.gz')[0] for f in t1_img_paths}
+        t2_prefixes = {str(f).split('-T2.nii.gz')[0] for f in t2_img_paths}
+        common_prefixes = t1_prefixes.intersection(t2_prefixes)
+        t1_img_paths = [f for f in t1_img_paths if str(f).split('-T1.nii.gz')[0] in common_prefixes]
+        t2_img_paths = [f for f in t2_img_paths if str(f).split('-T2.nii.gz')[0] in common_prefixes]
+
+        if self.inter_subj or self.modality == 't1t1':
+            # shuffle t2 images so that they don't correspond to the same subject!
+            random.shuffle(t2_img_paths)
+
+        if self.overfit:
+            t1_img_paths = t1_img_paths[:2]
+            t2_img_paths = t2_img_paths[:2]
+
+        def create_binary_mask(image):
+            mask_data = (image.data > 0).int()
+            return tio.LabelMap(tensor=mask_data, affine=image.affine)
+
+        tfms = tio.Compose([
+            tio.ToCanonical(),
+            tio.Resample('mod1')
+        ])
+        subjects = []
+        for t1_path, t2_path in tqdm(zip(t1_img_paths, t2_img_paths), desc="Loading subjects"):
+            t1_image = tio.ScalarImage(t1_path)
+            t2_image = tio.ScalarImage(t2_path)
+
+            mod1_mask = create_binary_mask(t1_image)
+            mod2_mask = create_binary_mask(t2_image)
+
+            subject = tio.Subject(
+                mod1=t1_image,
+                mod2=t2_image,
+                mod1_mask=mod1_mask,
+                mod2_mask=mod2_mask,
+            )
+            subject = tfms(subject)
             subjects.append(subject)
 
         return subjects
