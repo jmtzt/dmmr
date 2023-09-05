@@ -58,9 +58,9 @@ def main(cfg: DictConfig) -> None:
             callbacks=[ckpt_callback,
                        EarlyStopping(monitor="val_loss", mode="min", patience=3)],
             **cfg.training.trainer,
-            auto_lr_find=True)
+            )
     else:
-        trainer = pl.Trainer(**cfg.training.trainer, auto_lr_find=True)
+        trainer = pl.Trainer(**cfg.training.trainer)
 
     model = DeepMetricModel(cfg)
 
