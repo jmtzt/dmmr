@@ -76,15 +76,24 @@ class DeepMetricModel(LightningModule):
 
         out = self.forward(mod1, mod2)
 
+        if self.hparams.loss.sim_loss == 'ce':
+            # out = out.argmax(dim=1).float()
+            out = out.float()
+            labels = labels.long()
+
         losses = self.loss_fn(out, labels)
 
         return losses, out, labels
 
     @staticmethod
-    def compute_metrics(preds, labels):
+    def compute_metrics(preds, labels, mode='binary'):
+        average = 'binary' if mode == 'binary' else 'macro'
         acc = accuracy_score(labels.cpu().numpy(), preds.cpu().numpy())
-        f1 = f1_score(labels.cpu().numpy(), preds.cpu().numpy())
-        auc = roc_auc_score(labels.cpu().numpy(), preds.cpu().numpy())
+        f1 = f1_score(labels.cpu().numpy(), preds.cpu().numpy(), average=average)
+        if mode == 'binary':
+            auc = roc_auc_score(labels.cpu().numpy(), preds.cpu().numpy())
+        else:
+            auc = 0.0
 
         return acc, f1, auc
 
@@ -94,13 +103,19 @@ class DeepMetricModel(LightningModule):
         if self.hparams.network.type == 'dmmr_net_sigmoid':
             preds = out > 0.5
             labels = labels.bool()
+            mode = 'binary'
         elif self.hparams.network.type == 'dmmr_net_tanh' and self.hparams.loss.sim_loss == 'hinge':
             preds = out > 0.0
             labels[labels == 0] = -1  # convert positive label 0 to -1
             labels[labels == -1] = False  # Positive is False in this case
             labels[labels == 1] = True  # Negative is True in this case
+            mode = 'binary'
+        elif self.hparams.network.type == 'dmmr_net_multiclass' and self.hparams.loss.sim_loss == 'ce':
+            preds = out.argmax(dim=1)
+            mode = 'multiclass'
+            # labels = labels.long()
 
-        acc, f1, auc = self.compute_metrics(preds, labels)
+        acc, f1, auc = self.compute_metrics(preds, labels, mode)
 
         metrics_dict = {'loss': train_loss, 'train_acc': acc, 'train_f1': f1, 'train_auc': auc}
 
@@ -112,9 +127,10 @@ class DeepMetricModel(LightningModule):
     def validation_step(self, batch, batch_idx):
         val_loss, out, labels = self._step(batch)
 
-        if self.hparams.loss.sim_loss != 'hinge':
+        if self.hparams.network.type == 'dmmr_net_sigmoid':
             preds = out >= 0.5
             labels = labels.bool()
+            mode = 'binary'
             # Convert tensors to numpy arrays for plotting
             # preds_np = preds.cpu().numpy()
             # labels_np = labels.cpu().numpy()
@@ -142,8 +158,12 @@ class DeepMetricModel(LightningModule):
             labels[labels == 0] = -1  # convert positive label 0 to -1
             labels[labels == -1] = False  # Positive is False in this case
             labels[labels == 1] = True  # Negative is True in this case
+            mode = 'binary'
+        elif self.hparams.network.type == 'dmmr_net_multiclass' and self.hparams.loss.sim_loss == 'ce':
+            preds = out.argmax(dim=1)
+            mode = 'multiclass'
 
-        acc, f1, auc = self.compute_metrics(preds, labels)
+        acc, f1, auc = self.compute_metrics(preds, labels, mode=mode)
 
         metrics_dict = {'val_loss': val_loss, 'val_acc': acc, 'val_f1': f1, 'val_auc': auc}
 

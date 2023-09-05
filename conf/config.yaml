@@ -1,9 +1,9 @@
 # @package _global_
 defaults:
   - _self_
-  - data: ixi
-  - network: dmmr_sigmoid
-  - loss: bce
+  - data: camcan
+  - network: dmmr_multiclass
+  - loss: ce
   - training: training
 
 debug: False

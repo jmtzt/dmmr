@@ -30,6 +30,7 @@ class BasePatchDataModule(pl.LightningDataModule):
                  modality: str = 't1t2',
                  online_augmentations: bool = False,
                  random_convs: bool = False,
+                 multiclass: bool = False,
                  *args,
                  **kwargs):
         super().__init__()
@@ -50,6 +51,7 @@ class BasePatchDataModule(pl.LightningDataModule):
         self.positive_transforms = None
         self.online_augmentations = online_augmentations
         self.random_convs = random_convs
+        self.multiclass = multiclass
         self.args = args
         self.kwargs = kwargs
 
@@ -187,6 +189,112 @@ class BasePatchDataModule(pl.LightningDataModule):
                                                          self.negative_transforms)
 
     @staticmethod
+    def multiclass_label_collate_fn(batch):
+        flip_params = {'axes': (0, 1, 2)}
+
+        def generate_transforms(modules, flip_params, affine_params):
+            transform = tio.Compose([
+                tio.OneOf({
+                    tio.RandomAffine(scales=0, degrees=affine_params['degrees'],
+                                     translation=0, include=modules): 0.5,
+                    tio.RandomAffine(scales=0, degrees=tuple(-1 * np.array(affine_params['degrees'])),
+                                     translation=0, include=modules): 0.5,
+                }, include=modules),
+                tio.RandomFlip(**flip_params, include=modules),
+            ])
+            return transform
+
+        def generate_pos_transforms(modules, flip_params, affine_params):
+            transform = tio.Compose([
+                tio.OneOf({
+                    tio.RandomAffine(scales=0, degrees=affine_params['degrees'], translation=0, include=modules): 0.3,
+                    tio.RandomAffine(scales=affine_params['scales'], degrees=0, translation=0, include=modules): 0.1,
+                    tio.RandomAffine(scales=0, degrees=0, translation=affine_params['translation'],
+                                     include=modules): 0.2,
+                    tio.RandomAffine(degrees=affine_params['x_degrees'], scales=0, translation=0, include=modules): 0.1,
+                    tio.RandomAffine(degrees=affine_params['y_degrees'], scales=0, translation=0, include=modules): 0.1,
+                    tio.RandomAffine(degrees=affine_params['z_degrees'], scales=0, translation=0, include=modules): 0.1,
+                    tio.RandomAffine(degrees=affine_params['degrees'],
+                                     scales=affine_params['scales'],
+                                     translation=affine_params['translation'],
+                                     include=modules): 0.1,
+                }, include=modules),
+                tio.RandomFlip(**flip_params, include=modules),
+            ])
+            return transform
+
+        affine_params = {'degrees': (-25, 25),
+                            'scales': (0.98, 1.2),
+                            'translation': (0.5, 0.5, 0.5),
+                            'x_degrees': (25, 0, 0),
+                            'y_degrees': (0, 25, 0),
+                            'z_degrees': (0, 0, 25), }
+        transform_pos1 = generate_pos_transforms(['mod1', 'mod2'],
+                                                 flip_params,
+                                                    affine_params)
+        transform_neg = tio.Compose([generate_pos_transforms(['mod1'], flip_params, affine_params),
+                                     generate_pos_transforms(['mod2'], flip_params, affine_params),
+                                     tio.RandomFlip(**flip_params, include=['mod1', 'mod2'])])
+
+        transform_neg1 = tio.Compose([
+            generate_transforms(['mod1'], flip_params, {'degrees': (0, 0, 0, 0, 0, 0)}),
+            generate_transforms(['mod2'], flip_params, {'degrees': (45, 45, 45, 45, 45, 45)}),
+            tio.RandomFlip(**flip_params, include=['mod1', 'mod2'])
+        ])
+        transform_neg2 = tio.Compose([
+            generate_transforms(['mod1'], flip_params, {'degrees': (0, 0, 0, 0, 0, 0)}),
+            generate_transforms(['mod2'], flip_params, {'degrees': (90, 90, 90, 90, 90, 90)}),
+            tio.RandomFlip(**flip_params, include=['mod1', 'mod2'])
+        ])
+        transform_neg3 = tio.Compose([
+            generate_transforms(['mod1'], flip_params, {'degrees': (0, 0, 0, 0, 0, 0)}),
+            generate_transforms(['mod2'], flip_params, {'degrees': (135, 135, 135, 135, 135, 135)}),
+            tio.RandomFlip(**flip_params, include=['mod1', 'mod2'])
+        ])
+        transform_neg4 = tio.Compose([
+            generate_transforms(['mod1'], flip_params, {'degrees': (0, 0, 0, 0, 0, 0)}),
+            generate_transforms(['mod2'], flip_params, {'degrees': (180, 180, 180, 180, 180, 180)}),
+            tio.RandomFlip(**flip_params, include=['mod1', 'mod2'])
+        ])
+
+        def process_item(item, transform, label_value):
+            tfm_item = transform(item)
+            mod1 = tfm_item['mod1'][tio.DATA]
+            mod2 = tfm_item['mod2'][tio.DATA]
+            label = torch.tensor(label_value)
+            history = tfm_item.history
+            return mod1, mod2, label, history
+
+        positive_transforms = [transform_pos1]
+        negative_transforms = [transform_neg]
+        # negative_transforms = [transform_neg1, transform_neg2, transform_neg3, transform_neg4][:1]
+
+        mod1_augmented_list = []
+        mod2_augmented_list = []
+        labels_augmented_list = []
+        for idx, item in enumerate(batch):
+            if idx < len(batch) // 2:
+                transform_index = random.randint(0, len(positive_transforms) - 1)
+                transform = positive_transforms[transform_index]
+                mod1, mod2, label, history = process_item(item, transform, transform_index)
+            else:  # Second half of items get negative transforms
+                transform_index = random.randint(0, len(negative_transforms) - 1)
+                transform = negative_transforms[transform_index]
+                mod1, mod2, label, history = process_item(item, transform, len(positive_transforms) + transform_index)
+
+            mod1_augmented_list.append(mod1)
+            mod2_augmented_list.append(mod2)
+            labels_augmented_list.append(label)
+
+        mod1 = torch.stack(mod1_augmented_list).float()
+        mod2 = torch.stack(mod2_augmented_list).float()
+        labels = torch.stack(labels_augmented_list).float()
+
+        unique_labels, counts = torch.unique(labels, return_counts=True)
+
+        return {'mod1': mod1, 'mod2': mod2, 'label': labels}
+
+    @staticmethod
     def label_collate_fn(batch):
         affine_params = {'degrees': (-25, 25),
                          'scales': (0.98, 1.2),
@@ -293,7 +401,7 @@ class BasePatchDataModule(pl.LightningDataModule):
                 patches_queue,
                 batch_size=self.training_batch_size,
                 num_workers=0,
-                collate_fn=self.label_collate_fn,
+                collate_fn=self.label_collate_fn if not self.multiclass else self.multiclass_label_collate_fn,
             )
         else:
             return DataLoader(self.patches_training_set,
@@ -303,11 +411,26 @@ class BasePatchDataModule(pl.LightningDataModule):
                               pin_memory=True,)
 
     def val_dataloader(self):
-        return DataLoader(self.patches_validation_set,
-                          batch_size=self.validation_batch_size,
-                          num_workers=self.num_workers,
-                          shuffle=False,
-                          pin_memory=True, )
+        if not self.multiclass:
+            return DataLoader(self.patches_validation_set,
+                              batch_size=self.validation_batch_size,
+                              num_workers=self.num_workers,
+                              shuffle=False,
+                              pin_memory=True, )
+        else:
+            patches_queue = tio.Queue(
+                self.validation_subjects,
+                self.samples_per_volume * 4,
+                self.samples_per_volume,
+                self._get_sampler(),
+                num_workers=self.num_workers,
+            )
+            return DataLoader(
+                patches_queue,
+                batch_size=self.validation_batch_size,
+                num_workers=0,
+                collate_fn=self.multiclass_label_collate_fn,
+            )
 
 
 class CamCANDataModule(BasePatchDataModule):

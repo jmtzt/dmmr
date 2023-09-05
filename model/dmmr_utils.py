@@ -2,7 +2,7 @@ import torch
 from torch import nn as nn
 from torchmetrics import HingeLoss
 
-from model.network import DMMRNet, DMMRTanh
+from model.network import DMMRNet, DMMRTanh, DMMRNetMultiClass
 
 
 def get_loss_fn_dmmr(hparams):
@@ -10,6 +10,8 @@ def get_loss_fn_dmmr(hparams):
         return HingeLoss(task="binary")
     elif hparams.loss.sim_loss == "bce":
         return nn.BCELoss(weight=torch.tensor([hparams.loss.pos_weight]))
+    elif hparams.loss.sim_loss == "ce":
+        return nn.CrossEntropyLoss()
 
 
 def get_network_dmmr(hparams):
@@ -18,6 +20,8 @@ def get_network_dmmr(hparams):
         network = DMMRNet()
     elif hparams.network.type == "dmmr_net_tanh":
         network = DMMRTanh()
+    elif hparams.network.type == "dmmr_net_multiclass":
+        network = DMMRNetMultiClass()
     else:
         raise ValueError(f"Network config ({hparams.network.name}) not recognised.")
     return network

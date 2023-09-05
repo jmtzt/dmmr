@@ -13,3 +13,4 @@ pin_memory: True
 overfit: False
 online_augmentations: True
 modality: 't1t2'
+multiclass: True
