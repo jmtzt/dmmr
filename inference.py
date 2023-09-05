@@ -32,7 +32,9 @@ def get_scores(args):
     base_tfm = tio.ToCanonical()
     subject = base_tfm(subject)
 
-    loss = DMMRLoss(model_path=model_path, zero_percentage_threshold=args.zero_percentage_threshold).to(device)
+    loss = DMMRLoss(model_path=model_path,
+                    zero_percentage_threshold=args.zero_percentage_threshold,
+                    patch_size=args.patch_size).to(device)
 
     angle_start, angle_stop, angle_step = map(int, args.angle_range.split(':'))
     angle_range = np.arange(angle_start, angle_stop, angle_step)
@@ -161,9 +163,10 @@ def plot_similarity_curves(set_name, model, angle_range, t_range, rot_inter_scor
     axs[1, 1].set_xlim(angle_range[0], angle_range[-1])
 
     plt.tight_layout()
-    if not rot_inter_scores:
-        plt.savefig(f'outputs/figures/{set_name}_rot_trans_curves/rotation/'
-                    f'{set_name}_combined_{model}_rotation{args.angle_range}_axis{args.axis}.png')
+    # if not rot_inter_scores:
+    plt.savefig(f'outputs/figures/{set_name}_rot_trans_curves/rotation/'
+                f'{set_name}_combined_{model}_rotation{args.angle_range}_axis{args.axis}_'
+                f'{args.zero_percentage_threshold}zeropercent.png')
     plt.show()
 
     # Plot translation similarity curves
@@ -198,33 +201,45 @@ def plot_similarity_curves(set_name, model, angle_range, t_range, rot_inter_scor
     axs[1, 1].set_xlim(t_range[0], t_range[-1])
 
     plt.tight_layout()
-    if not t_inter_scores:
-        plt.savefig(f'outputs/figures/{set_name}_rot_trans_curves/translation/'
-                    f'{set_name}_combined_{model}_translation{args.translation_range}_axis{args.axis}.png')
+    # if not t_inter_scores:
+    plt.savefig(f'outputs/figures/{set_name}_rot_trans_curves/translation/'
+                f'{set_name}_combined_{model}_translation{args.translation_range}_axis{args.axis}_'
+                f'{args.zero_percentage_threshold}zeropercent.png')
     plt.show()
 
 
 def run_experiment(args):
     # Initialize the models list
     models = [
-        'camcan_t1t2_dmmr_net_tanh_hinge_lr0.0001_epochs100_nonorm.pt',
-        'camcan_t1t2_dmmr_net_tanh_hinge_lr0.0001_epochs100_norm.pt',
-        'camcan_t1t2_dmmr_net_sigmoid_bce_lr0.0001_epochs79_online_aug.pt',
-        'camcan_t1t2_dmmr_net_tanh_hinge_lr0.0001_epochs64_online_aug.pt',
-        'camcan_t1t2_dmmr_net_tanh_hinge_lr0.0001_epochs50_intersubject.pt',
-        'camcan_t1t2_dmmr_net_sigmoid_bce_lr0.0001_epochs50_intersubject.pt',
-        'camcan_t1t2_dmmr_net_sigmoid_bce_lr0.0001_epochs69_online_aug_extra_tfms.pt',  # -> same as single axis rot
-        'camcan_t1t2_dmmr_net_tanh_hinge_lr0.0001_epochs69_online_aug_extra_tfms.pt',
-        'camcan_t1t2_dmmr_net_sigmoid_bce_lr0.0001_epochs100_online_aug_tuned_tfms.pt',  # -> no single axis rot,
-        'camcan_t1t2_dmmr_net_tanh_hinge_lr0.0001_epochs59_online_aug_tuned_tfms.pt',  # just 3 axis rot at same time
-        'camcan_t1t2_dmmr_net_sigmoid_bce_lr0.0001_epochs100_online_aug_tuned_tfms_single_axis.pt',
-        'camcan_t1t2_dmmr_net_tanh_hinge_lr0.0001_epochs34_online_aug_tuned_tfms_single_axis.pt',
-        'camcan_t1t2_dmmr_net_sigmoid_bce_lr0.0001_epochs54_online_aug_tuned_tfms_single_axis_small_rot.pt',
+        # 'camcan_t1t2_dmmr_net_tanh_hinge_lr0.0001_epochs100_nonorm.pt',
+        # 'camcan_t1t2_dmmr_net_tanh_hinge_lr0.0001_epochs100_norm.pt',
+        # 'camcan_t1t2_dmmr_net_sigmoid_bce_lr0.0001_epochs79_online_aug.pt',
+        # 'camcan_t1t2_dmmr_net_tanh_hinge_lr0.0001_epochs64_online_aug.pt',
+        # 'camcan_t1t2_dmmr_net_tanh_hinge_lr0.0001_epochs50_intersubject.pt',
+        # 'camcan_t1t2_dmmr_net_sigmoid_bce_lr0.0001_epochs50_intersubject.pt',
+        # 'camcan_t1t2_dmmr_net_sigmoid_bce_lr0.0001_epochs69_online_aug_extra_tfms.pt',  # -> same as single axis rot
+        # 'camcan_t1t2_dmmr_net_tanh_hinge_lr0.0001_epochs69_online_aug_extra_tfms.pt',
+        # 'camcan_t1t2_dmmr_net_sigmoid_bce_lr0.0001_epochs100_online_aug_tuned_tfms.pt',  # -> no single axis rot,
+        # 'camcan_t1t2_dmmr_net_tanh_hinge_lr0.0001_epochs59_online_aug_tuned_tfms.pt',  # just 3 axis rot at same time
+        # 'camcan_t1t2_dmmr_net_sigmoid_bce_lr0.0001_epochs100_online_aug_tuned_tfms_single_axis.pt',
+        # 'camcan_t1t2_dmmr_net_tanh_hinge_lr0.0001_epochs34_online_aug_tuned_tfms_single_axis.pt',
+        # 'camcan_t1t2_dmmr_net_sigmoid_bce_lr0.0001_epochs54_online_aug_tuned_tfms_single_axis_small_rot.pt',
+        # 'camcan_t1t2_dmmr_net_tanh_hinge_lr0.0001_epochs54_online_aug_tuned_tfms_single_axis_small_rot.pt',
+        # 'camcan_t1t1_dmmr_net_sigmoid_bce_lr0.0001_epochs89_online_aug_tuned_tfms_single_axis_small_rot.pt',
+        # 'camcan_t1t1_dmmr_net_tanh_hinge_lr0.0001_epochs89_online_aug_tuned_tfms_single_axis_small_rot.pt',
+        # 'camcan_t1t1_dmmr_net_sigmoid_bce_lr0.0001_epochs19_online_aug_tuned_tfms_single_axis.pt',
+        # 'camcan_t1t1_dmmr_net_tanh_hinge_lr0.0001_epochs59_online_aug_tuned_tfms_single_axis.pt',
+        # 'dmmr_ixi_tanh.pt',
+        # 'dmmr_ixi_sigmoid.pt'
         'camcan_t1t2_dmmr_net_tanh_hinge_lr0.0001_epochs54_online_aug_tuned_tfms_single_axis_small_rot.pt',
-        'camcan_t1t1_dmmr_net_sigmoid_bce_lr0.0001_epochs89_online_aug_tuned_tfms_single_axis_small_rot.pt',
-        'camcan_t1t1_dmmr_net_tanh_hinge_lr0.0001_epochs89_online_aug_tuned_tfms_single_axis_small_rot.pt',
-        'camcan_t1t1_dmmr_net_sigmoid_bce_lr0.0001_epochs19_online_aug_tuned_tfms_single_axis.pt',
-        'camcan_t1t1_dmmr_net_tanh_hinge_lr0.0001_epochs59_online_aug_tuned_tfms_single_axis.pt',
+        'camcan_t1t2_dmmr_net_sigmoid_bce_lr0.0001_epochs59_online_aug_tuned_tfms_single_axis_small_rot_bound.pt',
+        'camcan_t1t2_dmmr_net_tanh_hinge_ps34.pt',
+        'camcan_t1t2_dmmr_net_sigmoid_bce_ps34.pt',
+        'camcan_t1t2_dmmr_net_sigmoid_multiclass_ce_5pos_5neg.pt',
+        'camcan_t1t2_dmmr_net_sigmoid_multiclass_ce_1pos_4neg.pt',
+        'camcan_t1t2_dmmr_net_sigmoid_multiclass_ce_1pos_4neg_ps34.pt',
+        'camcan_t1t2_dmmr_net_sigmoid_multiclass_ce_1pos_1neg.pt',
+        'camcan_t1t2_dmmr_net_sigmoid_multiclass_ce_1pos_1neg_ps34.pt',
     ]
 
     for model in models:
@@ -239,6 +254,9 @@ def run_experiment(args):
         if set == 'train' or set == 'test':
             subject_paths = subject_paths[:len(subject_paths) // 5]
         subject_pairs = get_subject_pairs(data_path)[:len(subject_paths)]
+
+        if 'ps34' in model:
+            args.patch_size = 34
 
         (rot_inter_scores, t_inter_scores,
          rot_intra_scores, t_intra_scores) = calculate_scores_subjects(args,
@@ -336,7 +354,8 @@ def parse_arguments():
                         type=str, help="Range of angles in format 'start:stop:step'")
     parser.add_argument("--translation_range", default="-100:100:10",
                         type=str, help="Range of translation in format 'start:stop:step'")
-    parser.add_argument("--zero_percentage_threshold", default=0.0, type=float,)
+    parser.add_argument("--zero_percentage_threshold", default=0.2, type=float,)
+    parser.add_argument("--patch_size", default=17, type=int,)
     parser.add_argument("--axis", type=str, default='xyz', help="Axis to rotate/translate around")
     return parser.parse_args()
 
